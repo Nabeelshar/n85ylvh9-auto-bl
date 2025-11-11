@@ -62,6 +62,9 @@ class NovelCrawler:
         self.parser = NovelParser(self.log)
         self.wordpress = WordPressAPI(self.wordpress_url, self.api_key, self.log)
         self.file_manager = FileManager(self.log)
+        
+        # Cache connection test result to reduce WordPress API calls
+        self.wordpress_connection_tested = False
     
     def log(self, message):
         """Print log message with Unicode error handling"""
@@ -180,14 +183,18 @@ class NovelCrawler:
             self.log(f"  Continuing from chapter {resume_from_chapter + 1}")
             self.log(f"  Progress: {resume_from_chapter}/{novel_progress.get('chapters_total')} chapters")
         
-        # Step 1: Test WordPress connection
-        self.log("[1/6] Testing WordPress API connection...")
-        success, result = self.wordpress.test_connection()
-        if success:
-            self.log(f"  Connected (WordPress v{result.get('wordpress', 'unknown')})")
+        # Step 1: Test WordPress connection (cached after first success)
+        if not self.wordpress_connection_tested:
+            self.log("[1/6] Testing WordPress API connection...")
+            success, result = self.wordpress.test_connection()
+            if success:
+                self.log(f"  Connected (WordPress v{result.get('wordpress', 'unknown')})")
+                self.wordpress_connection_tested = True
+            else:
+                self.log(f"  Failed: {result}")
+                return
         else:
-            self.log(f"  Failed: {result}")
-            return
+            self.log("[1/6] WordPress connection (cached ✓)")
         
         # Step 2: Fetch and parse novel page
         self.log("\n[2/6] Fetching novel page...")
@@ -225,7 +232,7 @@ class NovelCrawler:
                         else:
                             # Use Gemini for description if available, otherwise Google Translate
                             if self.use_gemini_for_content and self.gemini_translator:
-                                translated_description = self.gemini_translator.translate_description(novel_data['description'])
+                                translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
                                 self.log(f"  Description (EN - Gemini): Translated & cleaned")
                             else:
                                 translated_description = self.translator.translate(novel_data['description'])
@@ -239,7 +246,7 @@ class NovelCrawler:
                     
                     # Use Gemini for description if available, otherwise Google Translate
                     if self.use_gemini_for_content and self.gemini_translator:
-                        translated_description = self.gemini_translator.translate_description(novel_data['description'])
+                        translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
                         self.log(f"  Description (EN - Gemini): Translated & cleaned")
                     else:
                         translated_description = self.translator.translate(novel_data['description'])
@@ -253,7 +260,7 @@ class NovelCrawler:
                 
                 # Use Gemini for description if available, otherwise Google Translate
                 if self.use_gemini_for_content and self.gemini_translator:
-                    translated_description = self.gemini_translator.translate_description(novel_data['description'])
+                    translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
                     self.log(f"  Description (EN - Gemini): Translated & cleaned")
                 else:
                     translated_description = self.translator.translate(novel_data['description'])
@@ -436,6 +443,9 @@ class NovelCrawler:
                     self.gemini_translator.generate_glossary(chapters_raw_data)
                     self.gemini_translator.save_glossary(novel_id, self.file_manager)
             
+            # Prepare list for bulk chapter upload
+            chapters_to_upload = []
+            
             # Translate each chapter
             for ch_data in chapters_raw_data:
                 idx = ch_data['idx']
@@ -456,14 +466,14 @@ class NovelCrawler:
                         # Extract title and content from HTML
                         import re
                         title_match = re.search(r'<h1>(.*?)</h1>', translated_html, re.DOTALL)
-                        translated_title = title_match.group(1) if title_match else title
+                        translated_title = title_match.group(1) if title_match else f"Chapter {idx}"
                         content_match = re.search(r'</h1>\s*(.+)', translated_html, re.DOTALL)
                         translated_content = content_match.group(1).strip() if content_match else content
                     self.log(f"      Using cached translation")
                 else:
-                    # Translate title with Google Translate
-                    translated_title = self.translator.translate(title)
-                    self.log(f"      Title: {translated_title} (Google Translate)")
+                    # Use simple chapter number as title (no translation needed)
+                    translated_title = f"Chapter {idx}"
+                    self.log(f"      Title: {translated_title}")
                     
                     # Translate content with Gemini (with enhanced fallback strategy)
                     if self.use_gemini_for_content and self.gemini_translator:
@@ -546,68 +556,127 @@ class NovelCrawler:
                 translated_filename = self.file_manager.save_chapter(novel_id, idx, translated_title, translated_content, novel_title_translated, is_translated=True)
                 self.log(f"      Saved to {translated_filename}")
                 
-                # ========== PASS 3: Upload to WordPress ==========
-                self.log(f"      Uploading to WordPress...")
-                
-                # Create chapter in WordPress with formatted title and retry logic
+                # Store chapter data for bulk upload
                 chapter_wordpress_title = f"{novel_title_translated} Chapter {idx}"
-                chapter_data = {
+                chapters_to_upload.append({
                     'title': chapter_wordpress_title,
                     'title_zh': title,
                     'content': translated_content,
                     'story_id': story_id,
                     'url': ch_data['url'],
                     'chapter_number': idx
-                }
-                
-                # Retry chapter creation with exponential backoff
-                max_retries = 10
-                retry_delay = 0
-                chapter_created = False
-                
-                for attempt in range(max_retries):
-                    try:
-                        if attempt > 0:
-                            self.log(f"      WordPress retry {attempt}/{max_retries} (waiting {retry_delay}s)...")
-                            time.sleep(retry_delay)
-                        
-                        chapter_result = self.wordpress.create_chapter(chapter_data)
-                        if chapter_result.get('existed'):
-                            self.log(f"      Already exists in WordPress (ID: {chapter_result['id']})")
+                })
+        
+        # ========== PASS 3: Bulk upload to WordPress ==========
+        if self.should_translate and len(chapters_to_upload) > 0:
+            self.log(f"\n  {'='*50}")
+            self.log(f"  PASS 3: Uploading {len(chapters_to_upload)} chapters to WordPress")
+            self.log(f"  {'='*50}")
+            
+            # Try bulk upload first (much faster - single API call) with retries
+            bulk_success = False
+            max_bulk_retries = 3
+            
+            for bulk_attempt in range(max_bulk_retries):
+                try:
+                    if bulk_attempt > 0:
+                        retry_delay = 2 ** bulk_attempt  # 2s, 4s, 8s
+                        self.log(f"\n  Bulk upload retry {bulk_attempt}/{max_bulk_retries} (waiting {retry_delay}s)...")
+                        time.sleep(retry_delay)
+                    else:
+                        self.log(f"\n  Attempting bulk upload (1 API call)...")
+                    
+                    results = self.wordpress.create_chapters_bulk(chapters_to_upload)
+                    
+                    # Process results in order
+                    for i, result in enumerate(results):
+                        idx = chapters_to_upload[i]['chapter_number']
+                        if result.get('existed'):
+                            self.log(f"    Chapter {idx}: Already existed (ID: {result['id']})")
                             chapters_existed += 1
                         else:
-                            self.log(f"      ✓ Created in WordPress (ID: {chapter_result['id']})")
+                            scheduled_info = f" (scheduled for {result.get('publish_date', 'N/A')})" if result.get('scheduled') else " (published)"
+                            self.log(f"    Chapter {idx}: ✓ Created (ID: {result['id']}){scheduled_info}")
                             chapters_created += 1
-                        chapter_created = True
-                        break
-                    except Exception as e:
-                        self.log(f"      WordPress error: {e}")
-                        if attempt < max_retries - 1:
-                            retry_delay = min(600, 2 ** attempt)
-                        else:
-                            self.log(f"      CRITICAL: Chapter creation failed after {max_retries} attempts")
-                            self.log(f"      STOPPING: Cannot proceed without creating chapter {idx}")
-                            return
+                        
+                        # Update progress after each chapter
+                        self.file_manager.update_novel_progress(
+                            novel_url, 'in_progress',
+                            chapters_crawled=idx,
+                            chapters_total=len(novel_data['chapters']),
+                            story_id=story_id
+                        )
+                    
+                    self.log(f"  ✓ Bulk upload complete!")
+                    bulk_success = True
+                    break
+                    
+                except Exception as bulk_error:
+                    if bulk_attempt < max_bulk_retries - 1:
+                        self.log(f"  ✗ Bulk upload attempt {bulk_attempt + 1} failed: {bulk_error}")
+                    else:
+                        # Final attempt failed, fallback to individual
+                        self.log(f"  ✗ All bulk upload attempts failed: {bulk_error}")
+            
+            # Fallback to individual uploads if bulk failed
+            if not bulk_success:
+                self.log(f"  → Falling back to individual uploads with scheduling...")
                 
-                if not chapter_created:
-                    self.log(f"      CRITICAL: Failed to create chapter {idx} in WordPress")
-                    self.log(f"      STOPPING: Chapter sequence is critical, cannot continue")
-                    # Update progress before stopping
+                for chapter_idx, chapter_data in enumerate(chapters_to_upload):
+                    idx = chapter_data['chapter_number']
+                    self.log(f"\n    Chapter {idx}: Uploading individually...")
+                    
+                    # Add chapter_index for scheduling (0 for first, 1 for second, etc.)
+                    chapter_data['chapter_index'] = chapter_idx
+                    
+                    # Retry with exponential backoff
+                    max_retries = 10
+                    retry_delay = 0
+                    chapter_created = False
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            if attempt > 0:
+                                self.log(f"      Retry {attempt}/{max_retries} (waiting {retry_delay}s)...")
+                                time.sleep(retry_delay)
+                            
+                            chapter_result = self.wordpress.create_chapter(chapter_data)
+                            if chapter_result.get('existed'):
+                                self.log(f"      Already exists (ID: {chapter_result['id']})")
+                                chapters_existed += 1
+                            else:
+                                scheduled_info = f" (scheduled)" if chapter_result.get('scheduled') else " (published)"
+                                self.log(f"      ✓ Created (ID: {chapter_result['id']}){scheduled_info}")
+                                chapters_created += 1
+                            chapter_created = True
+                            break
+                        except Exception as e:
+                            self.log(f"      Error: {e}")
+                            if attempt < max_retries - 1:
+                                retry_delay = min(600, 2 ** attempt)
+                            else:
+                                self.log(f"      CRITICAL: Failed after {max_retries} attempts")
+                                self.log(f"      STOPPING: Cannot proceed without chapter {idx}")
+                                return
+                    
+                    if not chapter_created:
+                        self.log(f"      CRITICAL: Failed to create chapter {idx}")
+                        self.log(f"      STOPPING: Chapter sequence is critical")
+                        self.file_manager.update_novel_progress(
+                            novel_url, 'failed',
+                            chapters_crawled=idx-1,
+                            chapters_total=len(novel_data['chapters']),
+                            story_id=story_id
+                        )
+                        return
+                    
+                    # Update progress
                     self.file_manager.update_novel_progress(
-                        novel_url, 'failed', 
-                        chapters_crawled=idx-1, 
+                        novel_url, 'in_progress',
+                        chapters_crawled=idx,
                         chapters_total=len(novel_data['chapters']),
                         story_id=story_id
                     )
-                    return
-                
-                # Update progress after each successful chapter
-                self.file_manager.update_novel_progress(
-                    novel_url, 'in_progress',
-                    chapters_crawled=idx,
-                    chapters_total=len(novel_data['chapters']),
-                    story_id=story_id
-                )
         else:
             # No translation needed - just upload existing chapters
             for ch_data in chapters_raw_data:

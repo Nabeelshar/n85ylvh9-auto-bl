@@ -25,7 +25,7 @@ class GeminiTranslator:
             self.logger(f"ERROR: Failed to initialize Gemini client: {e}")
             self.client = None
     
-    def translate_description(self, description_html, source_lang='zh-CN', target_lang='en'):
+    def translate_description(self, description_html, raw_novel_name=None, source_lang='zh-CN', target_lang='en'):
         """
         Translate novel description with prompt to clean and extract only the description
         """
@@ -38,12 +38,14 @@ class GeminiTranslator:
 Task: Translate the following Chinese novel description to English. 
 
 Important instructions:
-1. ONLY include the actual novel description/synopsis in your response
-2. Remove any website footers, advertisements, or metadata
-3. Remove any "Latest Chapter:" or "Update:" information
-4. Keep the translation natural and engaging
-5. Preserve paragraph breaks
-6. Do NOT include any explanations or comments - just output the translated description
+1. ONLY return the main story synopsis/description
+2. Remove ALL markdown formatting (**, ##, bullets, etc.) - plain text only
+3. Remove character profiles, tags, reading guides, author notes, upcoming novels
+4. Remove "Latest Chapter:", "Update:", footers, advertisements
+5. Remove translator notes, character descriptions, themes
+6. Keep ONLY the core story plot description
+7. Natural, engaging translation with proper paragraph breaks
+8. No explanations, no comments - ONLY the synopsis text
 
 Chinese text to translate:
 {description_html}
@@ -63,6 +65,11 @@ English translation:"""
             )
             
             translated = response.text.strip()
+            
+            # Add raw novel name at the end if provided
+            if raw_novel_name:
+                translated = f"{translated}\n\nRaw Novel Name: {raw_novel_name}"
+            
             self.logger("  ✓ Description translated with Gemini")
             return translated
             
@@ -211,8 +218,9 @@ Instructions:
 2. Use the provided glossary for consistency with previous chapters
 3. Keep the same paragraph structure
 4. Translate cultivation terms naturally
-5. Do NOT include any notes, explanations, or meta-commentary
-6. Output ONLY the translated chapter content
+5. Remove ALL markdown formatting (**, ##, etc.) - plain text only
+6. Do NOT include any notes, explanations, or meta-commentary
+7. Output ONLY the translated chapter content
 
 {glossary_text}
 
@@ -310,24 +318,56 @@ Polished version:"""
         Returns:
             Censored text
         """
-        # Common words that might trigger filters
+        # Common words that might trigger filters (especially for BL/gay novels)
         censor_map = {
-            'dick': 'dk',
-            'pussy': 'py',
-            'anal': 'a**l',
-            'sex': 'S*x',
-            'fuck': 'f**k',
+            # Explicit content
+            'dick': 'member',
+            'cock': 'member',
+            'penis': 'member',
+            'pussy': 'flower',
+            'vagina': 'flower',
+            'ass': 'behind',
+            'asshole': 'behind',
+            'anal': 'intimate',
+            'sex': 'intimacy',
+            'sexy': 'attractive',
+            'sexual': 'intimate',
+            'fuck': 'embrace',
+            'fucking': 'embracing',
+            'fucked': 'embraced',
+            'cum': 'finish',
+            'cumming': 'finishing',
+            'orgasm': 'peak',
+            'aroused': 'excited',
+            'erection': 'reaction',
+            'hard-on': 'reaction',
+            'masturbate': 'touch',
+            'penetrate': 'enter',
+            'penetration': 'entry',
+            'thrust': 'move',
+            'thrusting': 'moving',
+            'moan': 'sound',
+            'moaning': 'sounding',
+            'groan': 'sound',
+            'groaning': 'sounding',
+            'lust': 'desire',
+            'lustful': 'desirous',
+            'seduce': 'attract',
+            'seduction': 'attraction',
+            'naked': 'unclothed',
+            'nude': 'bare',
+            'breast': 'chest',
+            'nipple': 'tip',
+            'kiss': 'touch',
+            'kissing': 'touching',
+            'lick': 'taste',
+            'licking': 'tasting',
+            'suck': 'draw',
+            'sucking': 'drawing',
+            # Violence (keep minimal since you said it's not about violence)
             'blood': 'energy',
             'bloody': 'intense',
-            'death': 'end',
-            'fucking': 'f***g',
-            'died': 'fell',
-            'dying': 'falling',
             'corpse': 'body',
-            'dead': 'fallen',
-            'slaughter': 'battle',
-            'slaughtered': 'battled',
-            'torture': 'pressure',
             'tortured': 'pressured',
             'pain': 'discomfort',
             'painful': 'difficult',

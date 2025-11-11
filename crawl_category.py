@@ -7,8 +7,8 @@ import time
 from crawler import NovelCrawler
 
 
-def crawl_category(category_url, max_pages=None):
-    """Crawl all novels from a category with pagination"""
+def crawl_category(category_url, max_novels=1):
+    """Crawl novels from a category with pagination - processes max_novels per run"""
     crawler = NovelCrawler()
     
     current_url = category_url
@@ -17,9 +17,10 @@ def crawl_category(category_url, max_pages=None):
     
     print("\n" + "="*60)
     print(f"Starting Category Crawl: {category_url}")
+    print(f"Max novels per run: {max_novels}")
     print("="*60 + "\n")
     
-    while current_url:
+    while current_url and total_novels_processed < max_novels:
         print(f"\n{'='*60}")
         print(f"Processing Category Page {page_num}")
         print(f"{'='*60}\n")
@@ -30,13 +31,13 @@ def crawl_category(category_url, max_pages=None):
         print(f"Found {len(novels)} novels on page {pagination['current']}/{pagination['total']}")
         print(f"Category Page: {current_url}\n")
         
-        # Check if we should stop at max_pages
-        if max_pages and page_num > max_pages:
-            print(f"\nReached maximum pages limit ({max_pages}). Stopping.")
-            break
-        
         # Crawl each novel on this page
         for idx, novel_url in enumerate(novels, 1):
+            # Stop if we've reached max novels
+            if total_novels_processed >= max_novels:
+                print(f"\n✓ Reached max novels limit ({max_novels}). Stopping.")
+                break
+                
             print(f"\n[Novel {idx}/{len(novels)} on page {page_num}]")
             print(f"URL: {novel_url}")
             
@@ -46,14 +47,13 @@ def crawl_category(category_url, max_pages=None):
             
             if novel_progress.get('status') == 'completed':
                 print(f"✓ Skipping: Already completed ({novel_progress.get('chapters_crawled')} chapters)")
-                total_novels_processed += 1
                 continue
             
             # Crawl the novel
             try:
                 crawler.crawl_novel(novel_url)
                 total_novels_processed += 1
-                print(f"\n✓ Novel completed successfully\n")
+                print(f"\n✓ Novel completed successfully ({total_novels_processed}/{max_novels})\n")
             except KeyboardInterrupt:
                 print("\n\n⚠ Crawl interrupted by user")
                 print(f"Progress saved. Processed {total_novels_processed} novels so far.")
@@ -79,14 +79,15 @@ def crawl_category(category_url, max_pages=None):
         state['last_category_page'] = current_url
         crawler.file_manager.save_crawler_state(state)
         
-        # Move to next page
-        if pagination['next']:
+        # Move to next page if needed
+        if total_novels_processed < max_novels and pagination['next']:
             current_url = pagination['next']
             page_num += 1
             print(f"\n→ Moving to next page: {current_url}")
             time.sleep(3)  # Delay between pages
         else:
-            print(f"\n✓ Reached last page of category")
+            if not pagination['next']:
+                print(f"\n✓ Reached last page of category")
             break
     
     print("\n" + "="*60)
@@ -99,20 +100,20 @@ def crawl_category(category_url, max_pages=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python crawl_category.py <category_url> [max_pages]")
+        print("Usage: python crawl_category.py <category_url> [max_novels]")
         print("\nExample:")
         print("  python crawl_category.py https://www.xbanxia.cc/list/1_1.html")
         print("  python crawl_category.py https://www.xbanxia.cc/list/1_1.html 5")
-        print("\nThis will crawl all novels from the category, with automatic resume on failure.")
+        print("\nThis will crawl novels from the category, with automatic resume on failure.")
+        print("Default: 1 novel per run (for GitHub Actions daily crawl)")
         sys.exit(1)
     
     category_url = sys.argv[1]
-    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    max_novels = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     
-    if max_pages:
-        print(f"Will process maximum {max_pages} pages")
+    print(f"Will process maximum {max_novels} novel(s)")
     
-    crawl_category(category_url, max_pages)
+    crawl_category(category_url, max_novels)
 
 
 if __name__ == '__main__':

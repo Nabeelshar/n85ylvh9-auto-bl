@@ -108,3 +108,27 @@ class WordPressAPI:
             }
         else:
             raise Exception(f"Failed to create chapter: {response.status_code} - {response.text}")
+    
+    def create_chapters_bulk(self, chapters_data_list):
+        """Create multiple chapters in a single API call (maintains sequence)
+        
+        Args:
+            chapters_data_list: List of chapter data dicts, MUST be in sequential order
+        
+        Returns:
+            List of results in the same order as input
+        """
+        response = requests.post(
+            f"{self.wordpress_url}/wp-json/crawler/v1/chapters/bulk",
+            headers={'X-API-Key': self.api_key},
+            json={'chapters': chapters_data_list},
+            timeout=60  # Longer timeout for bulk operation
+        )
+        
+        if response.status_code in [200, 201]:
+            result = response.json()
+            # Result should maintain order: [{'chapter_id': 123, 'existed': False}, ...]
+            return result.get('results', [])
+        else:
+            # Fallback to individual creation if bulk endpoint doesn't exist
+            raise Exception(f"Bulk chapter creation not supported: {response.status_code}")
