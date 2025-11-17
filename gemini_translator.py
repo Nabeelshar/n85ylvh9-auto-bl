@@ -1,36 +1,57 @@
 """
 Gemini API translator module with glossary support
+Uses REST API to avoid dependency conflicts
 """
 
 import json
 import time
-from google import genai
-from google.genai import types
+import requests
 
 
 class GeminiTranslator:
     def __init__(self, api_key, logger):
         self.logger = logger
-        self.client = None
+        self.api_key = api_key
         self.glossary = {}
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
         
         if not api_key:
             self.logger("WARNING: No Gemini API key provided")
             return
         
-        try:
-            self.client = genai.Client(api_key=api_key)
-            self.logger("✓ Gemini API client initialized")
-        except Exception as e:
-            self.logger(f"ERROR: Failed to initialize Gemini client: {e}")
-            self.client = None
+        self.logger("✓ Gemini REST API client initialized")
+    
+    def _call_gemini_api(self, model, prompt, temperature=0.3):
+        """Call Gemini REST API"""
+        url = f"{self.base_url}/{model}:generateContent?key={self.api_key}"
+        
+        payload = {
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": temperature
+            }
+        }
+        
+        response = requests.post(url, json=payload, timeout=120)
+        response.raise_for_status()
+        
+        data = response.json()
+        if 'candidates' in data and len(data['candidates']) > 0:
+            candidate = data['candidates'][0]
+            if 'content' in candidate and 'parts' in candidate['content']:
+                return candidate['content']['parts'][0]['text']
+        
+        raise Exception("No valid response from Gemini API")
     
     def translate_description(self, description_html, raw_novel_name=None, source_lang='zh-CN', target_lang='en'):
         """
         Translate novel description with prompt to clean and extract only the description
         """
-        if not self.client:
-            self.logger("WARNING: Gemini client not available for description translation")
+        if not self.api_key:
+            self.logger("WARNING: Gemini API key not available for description translation")
             return description_html
         
         prompt = f"""You are a professional translator specializing in Chinese web novels.
@@ -55,15 +76,7 @@ English translation:"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = self.client.models.generate_content(
-                    model='models/gemini-flash-latest',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                    )
-                )
-                
-                translated = response.text.strip()
+                translated = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.3).strip()
                 
                 # Verify translation actually happened (not just returned original)
                 if translated == description_html or len(translated) < 10:
@@ -98,8 +111,8 @@ English translation:"""
         Returns:
             dict: Glossary mapping Chinese terms to English translations
         """
-        if not self.client:
-            self.logger("WARNING: Gemini client not available for glossary generation")
+        if not self.api_key:
+            self.logger("WARNING: Gemini API key not available for glossary generation")
             return {}
         
         self.logger(f"\n{'='*50}")
@@ -140,16 +153,8 @@ Chinese chapters:
 JSON glossary:"""
         
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                )
-            )
-            
             # Parse JSON response
-            response_text = response.text.strip()
+            response_text = self._call_gemini_api('gemini-2.5-flash', prompt, temperature=0.2).strip()
             
             # Extract JSON from markdown code blocks if present
             if '```json' in response_text:
@@ -203,8 +208,8 @@ JSON glossary:"""
             tuple: (translated_content, translation_method)
             translation_method: 'gemini', 'gemini_censored', or 'google'
         """
-        if not self.client:
-            self.logger("    WARNING: Gemini client not available")
+        if not self.api_key:
+            self.logger("    WARNING: Gemini API key not available")
             return None, 'failed'
         
         if glossary is None:
@@ -244,15 +249,7 @@ English translation:"""
         last_error = None
         for attempt in range(max_retries):
             try:
-                response = self.client.models.generate_content(
-                    model='models/gemini-flash-latest',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                    )
-                )
-                
-                translated = response.text.strip()
+                translated = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.3).strip()
                 return translated, 'gemini'
                 
             except Exception as e:
@@ -310,15 +307,7 @@ Text to polish:
 
 Polished version:"""
                         
-                        response = self.client.models.generate_content(
-                            model='models/gemini-flash-latest',
-                            contents=retry_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.3,
-                            )
-                        )
-                        
-                        polished = response.text.strip()
+                        polished = self._call_gemini_api('gemini-flash-latest', retry_prompt, temperature=0.3).strip()
                         self.logger(f"    ✓ Gemini succeeded with censored content")
                         return polished, 'gemini_censored'
                         
