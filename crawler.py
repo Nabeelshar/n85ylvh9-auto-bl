@@ -59,11 +59,17 @@ class NovelCrawler:
                     
                     # Reinitialize translator after installation
                     import importlib
-                    import translator
-                    importlib.reload(translator)
-                    from translator import Translator
+                    import translator as translator_module
+                    importlib.reload(translator_module)
+                    from translator import Translator as TranslatorClass
                     
-                    self.translator = Translator(self.google_project_id, self.log, cred_file if 'cred_file' in locals() else None)
+                    import os
+                    if self.google_credentials_file:
+                        cred_file_path = os.path.join(os.path.dirname(__file__), self.google_credentials_file)
+                    else:
+                        cred_file_path = None
+                    
+                    self.translator = TranslatorClass(self.google_project_id, self.log, cred_file_path)
                     
                     if not self.translator or not self.translator.client:
                         self.log("✗ Translator still unavailable after install")
