@@ -61,7 +61,7 @@ class NovelCrawler:
         self.gemini_translator = None
         if self.use_gemini_for_content and self.gemini_api_key:
             self.gemini_translator = GeminiTranslator(self.gemini_api_key, self.log)
-            if not self.gemini_translator.client:
+            if not self.gemini_translator.api_key:
                 self.log("WARNING: Gemini API not available, will use Google Translate for all content")
                 self.use_gemini_for_content = False
         
