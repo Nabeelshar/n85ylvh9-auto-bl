@@ -49,6 +49,16 @@ class NovelCrawler:
             if not self.translator or not self.translator.client:
                 self.log("CRITICAL ERROR: Translation Required But Unavailable")
                 self.log("Please check if googletrans==4.0.0rc1 is installed: pip install googletrans==4.0.0rc1")
+                self.log("")
+                self.log("Attempting to install googletrans automatically...")
+                import subprocess
+                try:
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "googletrans==4.0.0rc1"])
+                    self.log("✓ googletrans installed successfully")
+                    self.log("Please run the crawler again")
+                except Exception as e:
+                    self.log(f"✗ Auto-install failed: {e}")
+                    self.log("Please install manually: pip install googletrans==4.0.0rc1")
                 raise Exception("Translation service initialization failed")
         
         # Initialize Gemini translator (for descriptions and chapter content)
@@ -366,7 +376,13 @@ class NovelCrawler:
             self.log(f"  Resuming from chapter {start_chapter} to {end_chapter}")
         
         # Get existing chapters (already checked in step 5, but get details for processing)
-        chapter_status = self.wordpress.get_story_chapter_status(story_id, len(novel_data['chapters']))
+        # CPU OPTIMIZATION: Cache this result to avoid repeated API calls
+        if not hasattr(self, '_cached_chapter_status') or self._cached_chapter_status.get('story_id') != story_id:
+            chapter_status = self.wordpress.get_story_chapter_status(story_id, len(novel_data['chapters']))
+            self._cached_chapter_status = {'story_id': story_id, 'status': chapter_status}
+        else:
+            chapter_status = self._cached_chapter_status['status']
+            self.log(f"  Using cached chapter status (CPU optimization)")
         
         if chapter_status['success']:
             if chapter_status['chapters_count'] > 0:
@@ -410,10 +426,6 @@ class NovelCrawler:
             
             self.log(f"      Extracted {len(content)} characters")
             
-            # Save raw chapter
-            raw_filename = self.file_manager.save_chapter(novel_id, idx, title, content, novel_title_raw, is_translated=False)
-            self.log(f"      Saved to {raw_filename}")
-            
             # Store for glossary generation and translation
             chapters_raw_data.append({
                 'idx': idx,
@@ -425,6 +437,13 @@ class NovelCrawler:
             # Delay between requests
             if idx < end_chapter:
                 time.sleep(self.delay)
+        
+        # CPU OPTIMIZATION: Batch save all raw chapters at once (reduces file I/O)
+        if chapters_raw_data:
+            self.log(f"\n  Saving {len(chapters_raw_data)} raw chapters...")
+            for ch_data in chapters_raw_data:
+                raw_filename = self.file_manager.save_chapter(novel_id, ch_data['idx'], ch_data['title'], ch_data['content'], novel_title_raw, is_translated=False)
+            self.log(f"  ✓ All raw chapters saved")
         
         # ========== PASS 2: Generate glossary and translate ==========
         if self.should_translate and len(chapters_raw_data) > 0:
@@ -552,11 +571,7 @@ class NovelCrawler:
                                     self.log(f"      CRITICAL: Translation failed after {max_retries} attempts")
                                     return
                 
-                # Save translated chapter
-                translated_filename = self.file_manager.save_chapter(novel_id, idx, translated_title, translated_content, novel_title_translated, is_translated=True)
-                self.log(f"      Saved to {translated_filename}")
-                
-                # Store chapter data for bulk upload
+                # Store chapter data for bulk upload (save to disk later in batch)
                 chapter_wordpress_title = f"{novel_title_translated} Chapter {idx}"
                 chapters_to_upload.append({
                     'title': chapter_wordpress_title,
@@ -566,6 +581,17 @@ class NovelCrawler:
                     'url': ch_data['url'],
                     'chapter_number': idx
                 })
+            
+            # CPU OPTIMIZATION: Batch save all translated chapters at once
+            self.log(f"\n  Saving {len(chapters_to_upload)} translated chapters...")
+            for i, ch_upload in enumerate(chapters_to_upload):
+                ch_data = chapters_raw_data[i]
+                translated_filename = self.file_manager.save_chapter(
+                    novel_id, ch_upload['chapter_number'], 
+                    ch_upload['title'], ch_upload['content'], 
+                    novel_title_translated, is_translated=True
+                )
+            self.log(f"  ✓ All translated chapters saved")
         
         # ========== PASS 3: Bulk upload to WordPress ==========
         if self.should_translate and len(chapters_to_upload) > 0:
@@ -589,8 +615,10 @@ class NovelCrawler:
                     results = self.wordpress.create_chapters_bulk(chapters_to_upload)
                     
                     # Process results in order
+                    last_idx = 0
                     for i, result in enumerate(results):
                         idx = chapters_to_upload[i]['chapter_number']
+                        last_idx = idx
                         if result.get('existed'):
                             self.log(f"    Chapter {idx}: Already existed (ID: {result['id']})")
                             chapters_existed += 1
@@ -598,14 +626,14 @@ class NovelCrawler:
                             scheduled_info = f" (scheduled for {result.get('publish_date', 'N/A')})" if result.get('scheduled') else " (published)"
                             self.log(f"    Chapter {idx}: ✓ Created (ID: {result['id']}){scheduled_info}")
                             chapters_created += 1
-                        
-                        # Update progress after each chapter
-                        self.file_manager.update_novel_progress(
-                            novel_url, 'in_progress',
-                            chapters_crawled=idx,
-                            chapters_total=len(novel_data['chapters']),
-                            story_id=story_id
-                        )
+                    
+                    # CPU OPTIMIZATION: Update progress once after bulk upload (not per chapter)
+                    self.file_manager.update_novel_progress(
+                        novel_url, 'in_progress',
+                        chapters_crawled=last_idx,
+                        chapters_total=len(novel_data['chapters']),
+                        story_id=story_id
+                    )
                     
                     self.log(f"  ✓ Bulk upload complete!")
                     bulk_success = True
