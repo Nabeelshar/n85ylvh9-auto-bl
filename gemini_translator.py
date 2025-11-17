@@ -52,30 +52,40 @@ Chinese text to translate:
 
 English translation:"""
         
-        try:
-            response = self.client.models.generate_content(
-                model='gemini-flash-latest',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=0,
-                    ),
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(
+                    model='gemini-2.0-flash-exp',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                    )
                 )
-            )
-            
-            translated = response.text.strip()
-            
-            # Add raw novel name at the end if provided
-            if raw_novel_name:
-                translated = f"{translated}\n\nRaw Novel Name: {raw_novel_name}"
-            
-            self.logger("  ✓ Description translated with Gemini")
-            return translated
-            
-        except Exception as e:
-            self.logger(f"  ✗ Gemini description translation failed: {e}")
-            return description_html
+                
+                translated = response.text.strip()
+                
+                # Verify translation actually happened (not just returned original)
+                if translated == description_html or len(translated) < 10:
+                    raise Exception("Translation returned original or empty text")
+                
+                # Add raw novel name at the end if provided
+                if raw_novel_name:
+                    translated = f"{translated}\n\nRaw Novel Name: {raw_novel_name}"
+                
+                self.logger("  ✓ Description translated with Gemini")
+                return translated
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if attempt < max_retries - 1:
+                    self.logger(f"  ⚠ Gemini description attempt {attempt + 1} failed: {e}")
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    self.logger(f"  ✗ Gemini description translation failed after {max_retries} attempts: {e}")
+                    # CRITICAL: Return None to signal translation failure
+                    return None
     
     def generate_glossary(self, chapters_data, max_chapters=None):
         """
@@ -128,13 +138,10 @@ JSON glossary:"""
         
         try:
             response = self.client.models.generate_content(
-                model='gemini-flash-latest',
+                model='gemini-2.0-flash-exp',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.2,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=0,
-                    ),
                 )
             )
             
@@ -229,27 +236,42 @@ Chapter {chapter_number} content (Chinese):
 
 English translation:"""
         
-        # ATTEMPT 1: Try Gemini with original content
-        try:
-            response = self.client.models.generate_content(
-                model='gemini-flash-latest',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_budget=0,
-                    ),
+        # ATTEMPT 1: Try Gemini with original content (with retries for API errors)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(
+                    model='gemini-2.0-flash-exp',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                    )
                 )
-            )
-            
-            translated = response.text.strip()
-            return translated, 'gemini'
-            
-        except Exception as e:
-            error_msg = str(e)
-            
-            # Check for safety/content filtering errors
-            if 'SAFETY' in error_msg.upper() or 'BLOCK' in error_msg.upper():
+                
+                translated = response.text.strip()
+                return translated, 'gemini'
+                
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check for safety/content filtering errors - DON'T RETRY, go to fallback
+                if 'SAFETY' in error_msg.upper() or 'BLOCK' in error_msg.upper() or 'HARM' in error_msg.upper():
+                    self.logger(f"    ⚠ Gemini safety filter triggered: {error_msg}")
+                    break  # Exit retry loop, go to fallback strategy
+                
+                # For other errors (API, rate limit, etc.), retry
+                if attempt < max_retries - 1:
+                    self.logger(f"    ⚠ Gemini attempt {attempt + 1} failed: {error_msg}")
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    self.logger(f"    ✗ Gemini translation failed after {max_retries} attempts: {error_msg}")
+                    return None, 'failed'
+        
+        # Only reach here if safety filter triggered
+        error_msg = str(e)
+        if 'SAFETY' in error_msg.upper() or 'BLOCK' in error_msg.upper() or 'HARM' in error_msg.upper():
                 self.logger(f"    ⚠ Gemini safety filter triggered")
                 
                 # ATTEMPT 2: Translate with Google Translate, then censor and retry Gemini
@@ -283,13 +305,10 @@ Text to polish:
 Polished version:"""
                         
                         response = self.client.models.generate_content(
-                            model='gemini-flash-latest',
+                            model='gemini-2.0-flash-exp',
                             contents=retry_prompt,
                             config=types.GenerateContentConfig(
                                 temperature=0.3,
-                                thinking_config=types.ThinkingConfig(
-                                    thinking_budget=0,
-                                ),
                             )
                         )
                         

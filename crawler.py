@@ -236,9 +236,13 @@ class NovelCrawler:
                             translated_description = existing_meta['description_translated']
                             self.log(f"  Using cached description")
                         else:
-                            # Use Gemini for description if available, otherwise Google Translate
+                            # CRITICAL: Description MUST be translated
                             if self.use_gemini_for_content and self.gemini_translator:
                                 translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
+                                if translated_description is None:
+                                    self.log(f"  ✗ CRITICAL: Description translation failed completely")
+                                    self.log(f"  Aborting - cannot publish untranslated content")
+                                    return
                                 self.log(f"  Description (EN - Gemini): Translated & cleaned")
                             else:
                                 translated_description = self.translator.translate(novel_data['description'])
@@ -250,9 +254,13 @@ class NovelCrawler:
                     translated_title = translated_title.title()
                     self.log(f"  Title (EN - Google Translate): {translated_title}")
                     
-                    # Use Gemini for description if available, otherwise Google Translate
+                    # CRITICAL: Description MUST be translated
                     if self.use_gemini_for_content and self.gemini_translator:
                         translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
+                        if translated_description is None:
+                            self.log(f"  ✗ CRITICAL: Description translation failed completely")
+                            self.log(f"  Aborting - cannot publish untranslated content")
+                            return
                         self.log(f"  Description (EN - Gemini): Translated & cleaned")
                     else:
                         translated_description = self.translator.translate(novel_data['description'])
@@ -264,9 +272,13 @@ class NovelCrawler:
                 translated_title = translated_title.title()
                 self.log(f"  Title (EN - Google Translate): {translated_title}")
                 
-                # Use Gemini for description if available, otherwise Google Translate
+                # CRITICAL: Description MUST be translated
                 if self.use_gemini_for_content and self.gemini_translator:
                     translated_description = self.gemini_translator.translate_description(novel_data['description'], raw_novel_name=novel_data['title'])
+                    if translated_description is None:
+                        self.log(f"  ✗ CRITICAL: Description translation failed completely")
+                        self.log(f"  Aborting - cannot publish untranslated content")
+                        return
                     self.log(f"  Description (EN - Gemini): Translated & cleaned")
                 else:
                     translated_description = self.translator.translate(novel_data['description'])
