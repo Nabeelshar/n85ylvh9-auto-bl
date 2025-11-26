@@ -225,7 +225,7 @@ JSON glossary:"""
                 self.logger(f"  Glossary generation attempt {attempt + 1}/{max_retries}...")
                 
                 # Parse JSON response
-                response_text = self._call_gemini_api('gemini-2.5-flash', prompt, temperature=0.2).strip()
+                response_text = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.2).strip()
                 
                 # Extract JSON from markdown code blocks if present
                 if '```json' in response_text:
