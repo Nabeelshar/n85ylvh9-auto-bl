@@ -4,7 +4,13 @@ on:
   schedule:
     # Run daily at 00:00 UTC
     - cron: '0 0 * * *'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      novel_urls:
+        description: 'Comma-separated novel URLs to re-crawl (leave empty for category crawl)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   crawl:
@@ -41,14 +47,25 @@ jobs:
         }
         EOF
         
-    - name: Run category crawler
+    - name: Run crawler
       run: |
-        python crawl_category.py "${{ secrets.CATEGORY_URL }}"
+        if [ -n "${{ github.event.inputs.novel_urls }}" ]; then
+          echo "Re-crawling specific novels..."
+          IFS=',' read -ra URLS <<< "${{ github.event.inputs.novel_urls }}"
+          for url in "${URLS[@]}"; do
+            echo "Crawling: $url"
+            python crawler.py "$url" || echo "Failed: $url"
+          done
+        else
+          echo "Running category crawler..."
+          python crawl_category.py "${{ secrets.CATEGORY_URL }}"
+        fi
         
     - name: Commit and push state
       run: |
         git config --global user.name "GitHub Actions Bot"
         git config --global user.email "actions@github.com"
-        git add crawler_state.json
+        # Force add crawler_state.json even if in .gitignore
+        git add -f crawler_state.json 2>/dev/null || true
         git diff --quiet && git diff --staged --quiet || git commit -m "Update crawler state [skip ci]"
-        git push
+        git push || echo "Nothing to push"
