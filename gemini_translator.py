@@ -1,6 +1,7 @@
 """
 Gemini API translator module with glossary support
 Uses REST API to avoid dependency conflicts
+Supports rotating API keys to handle rate limits
 """
 
 import json
@@ -11,40 +12,101 @@ import requests
 class GeminiTranslator:
     def __init__(self, api_key, logger):
         self.logger = logger
-        self.api_key = api_key
         self.glossary = {}
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
         
-        if not api_key:
+        # Support multiple API keys (comma-separated or single)
+        if api_key:
+            # Parse multiple keys if provided as comma-separated
+            self.api_keys = [k.strip() for k in api_key.split(',') if k.strip()]
+            self.api_key = self.api_keys[0] if self.api_keys else None
+            self.current_key_index = 0
+        else:
+            self.api_keys = []
+            self.api_key = None
+        
+        if not self.api_keys:
             self.logger("WARNING: No Gemini API key provided")
             return
         
-        self.logger("✓ Gemini REST API client initialized")
+        self.logger(f"✓ Gemini REST API client initialized with {len(self.api_keys)} API key(s)")
+    
+    def _get_current_key(self):
+        """Get the current API key"""
+        if not self.api_keys:
+            return None
+        return self.api_keys[self.current_key_index]
+    
+    def _rotate_key(self):
+        """Rotate to the next API key"""
+        if len(self.api_keys) <= 1:
+            return False
+        old_index = self.current_key_index
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+        self.api_key = self.api_keys[self.current_key_index]
+        self.logger(f"  🔄 Rotated to API key {self.current_key_index + 1}/{len(self.api_keys)}")
+        return self.current_key_index != old_index
     
     def _call_gemini_api(self, model, prompt, temperature=0.3):
-        """Call Gemini REST API"""
-        url = f"{self.base_url}/{model}:generateContent?key={self.api_key}"
+        """Call Gemini REST API with automatic key rotation on 429 errors"""
+        if not self.api_keys:
+            raise Exception("No API keys available")
         
-        payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": temperature
+        # Try each key before giving up
+        keys_tried = 0
+        last_error = None
+        
+        while keys_tried < len(self.api_keys):
+            current_key = self._get_current_key()
+            url = f"{self.base_url}/{model}:generateContent?key={current_key}"
+            
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": prompt}]
+                }],
+                "generationConfig": {
+                    "temperature": temperature
+                }
             }
-        }
+            
+            try:
+                response = requests.post(url, json=payload, timeout=120)
+                
+                # Check for rate limit (429) - rotate key
+                if response.status_code == 429:
+                    self.logger(f"  ⚠ API key {self.current_key_index + 1} hit rate limit (429)")
+                    keys_tried += 1
+                    if self._rotate_key():
+                        continue  # Try next key
+                    else:
+                        # Only one key or all keys exhausted
+                        response.raise_for_status()
+                
+                response.raise_for_status()
+                
+                data = response.json()
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    candidate = data['candidates'][0]
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        return candidate['content']['parts'][0]['text']
+                
+                raise Exception("No valid response from Gemini API")
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    last_error = e
+                    keys_tried += 1
+                    if self._rotate_key():
+                        continue
+                raise
+            except Exception as e:
+                raise
         
-        response = requests.post(url, json=payload, timeout=120)
-        response.raise_for_status()
-        
-        data = response.json()
-        if 'candidates' in data and len(data['candidates']) > 0:
-            candidate = data['candidates'][0]
-            if 'content' in candidate and 'parts' in candidate['content']:
-                return candidate['content']['parts'][0]['text']
-        
-        raise Exception("No valid response from Gemini API")
+        # All keys exhausted
+        if last_error:
+            raise last_error
+        raise Exception("All API keys exhausted")
     
     def translate_description(self, description_html, raw_novel_name=None, source_lang='zh-CN', target_lang='en'):
         """
