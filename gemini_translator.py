@@ -103,6 +103,7 @@ English translation:"""
     def generate_glossary(self, chapters_data, max_chapters=None):
         """
         Generate a glossary of names and terms from all chapters
+        MANDATORY - returns None on failure to abort the process
         
         Args:
             chapters_data: List of dicts with 'title' and 'content' (Chinese)
@@ -110,13 +111,14 @@ English translation:"""
         
         Returns:
             dict: Glossary mapping Chinese terms to English translations
+            None: If generation fails (signals abort)
         """
         if not self.api_key:
             self.logger("WARNING: Gemini API key not available for glossary generation")
-            return {}
+            return None
         
         self.logger(f"\n{'='*50}")
-        self.logger("Generating Translation Glossary")
+        self.logger("Generating Translation Glossary (MANDATORY)")
         self.logger(f"{'='*50}")
         self.logger(f"Analyzing all {len(chapters_data)} chapters (complete raw content)...")
         
@@ -152,46 +154,67 @@ Chinese chapters:
 
 JSON glossary:"""
         
-        try:
-            # Parse JSON response
-            response_text = self._call_gemini_api('gemini-2.5-flash', prompt, temperature=0.2).strip()
+        # Retry with increasing wait times: 1min, 2min, 4min, 8min, 16min, 20min (max)
+        wait_times = [60, 120, 240, 480, 960, 1200]  # seconds
+        max_retries = len(wait_times)
+        
+        for attempt in range(max_retries):
+            try:
+                self.logger(f"  Glossary generation attempt {attempt + 1}/{max_retries}...")
+                
+                # Parse JSON response
+                response_text = self._call_gemini_api('gemini-2.5-flash', prompt, temperature=0.2).strip()
+                
+                # Extract JSON from markdown code blocks if present
+                if '```json' in response_text:
+                    response_text = response_text.split('```json')[1].split('```')[0].strip()
+                elif '```' in response_text:
+                    response_text = response_text.split('```')[1].split('```')[0].strip()
+                
+                glossary_data = json.loads(response_text)
+                
+                # Flatten glossary for easy lookup
+                self.glossary = {}
+                for category in ['characters', 'places', 'terms']:
+                    if category in glossary_data:
+                        self.glossary.update(glossary_data[category])
+                
+                # Verify we got actual entries
+                if not self.glossary:
+                    raise Exception("Glossary is empty - no entries extracted")
+                
+                self.logger(f"✓ Glossary generated with {len(self.glossary)} entries")
+                self.logger(f"  - Characters: {len(glossary_data.get('characters', {}))}")
+                self.logger(f"  - Places: {len(glossary_data.get('places', {}))}")
+                self.logger(f"  - Terms: {len(glossary_data.get('terms', {}))}")
+                
+                # Log sample entries
+                if self.glossary:
+                    self.logger("\n  Sample glossary entries:")
+                    for i, (chinese, english) in enumerate(list(self.glossary.items())[:5]):
+                        self.logger(f"    {chinese} → {english}")
+                    if len(self.glossary) > 5:
+                        self.logger(f"    ... and {len(self.glossary) - 5} more")
+                
+                return self.glossary
+                
+            except json.JSONDecodeError as e:
+                self.logger(f"  ✗ Attempt {attempt + 1} failed - JSON parse error: {e}")
+                if attempt < max_retries - 1:
+                    self.logger(f"    Response preview: {response_text[:300]}...")
+            except Exception as e:
+                self.logger(f"  ✗ Attempt {attempt + 1} failed: {e}")
             
-            # Extract JSON from markdown code blocks if present
-            if '```json' in response_text:
-                response_text = response_text.split('```json')[1].split('```')[0].strip()
-            elif '```' in response_text:
-                response_text = response_text.split('```')[1].split('```')[0].strip()
-            
-            glossary_data = json.loads(response_text)
-            
-            # Flatten glossary for easy lookup
-            self.glossary = {}
-            for category in ['characters', 'places', 'terms']:
-                if category in glossary_data:
-                    self.glossary.update(glossary_data[category])
-            
-            self.logger(f"✓ Glossary generated with {len(self.glossary)} entries")
-            self.logger(f"  - Characters: {len(glossary_data.get('characters', {}))}")
-            self.logger(f"  - Places: {len(glossary_data.get('places', {}))}")
-            self.logger(f"  - Terms: {len(glossary_data.get('terms', {}))}")
-            
-            # Log sample entries
-            if self.glossary:
-                self.logger("\n  Sample glossary entries:")
-                for i, (chinese, english) in enumerate(list(self.glossary.items())[:5]):
-                    self.logger(f"    {chinese} → {english}")
-                if len(self.glossary) > 5:
-                    self.logger(f"    ... and {len(self.glossary) - 5} more")
-            
-            return self.glossary
-            
-        except json.JSONDecodeError as e:
-            self.logger(f"✗ Failed to parse glossary JSON: {e}")
-            self.logger(f"  Response: {response_text[:500]}")
-            return {}
-        except Exception as e:
-            self.logger(f"✗ Glossary generation failed: {e}")
-            return {}
+            # If not the last attempt, wait and retry
+            if attempt < max_retries - 1:
+                wait_time = wait_times[attempt]
+                wait_minutes = wait_time // 60
+                self.logger(f"  ⏳ Waiting {wait_minutes} minute(s) before retry...")
+                time.sleep(wait_time)
+            else:
+                self.logger(f"\n✗ CRITICAL: Glossary generation failed after {max_retries} attempts")
+                self.logger(f"  Cannot proceed without glossary - aborting")
+                return None  # Signal failure to abort
     
     def translate_chapter_content(self, content, chapter_number, glossary=None, google_translator=None):
         """

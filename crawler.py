@@ -465,9 +465,16 @@ class NovelCrawler:
                 glossary_loaded = self.gemini_translator.load_glossary(novel_id)
                 
                 if not glossary_loaded:
-                    # Generate glossary from all downloaded chapters
+                    # Generate glossary from all downloaded chapters (MANDATORY)
                     self.log(f"\n  Generating glossary from all {len(chapters_raw_data)} chapters...")
-                    self.gemini_translator.generate_glossary(chapters_raw_data)
+                    glossary = self.gemini_translator.generate_glossary(chapters_raw_data)
+                    
+                    # Check if glossary generation failed
+                    if glossary is None:
+                        self.log(f"\n✗ CRITICAL: Glossary generation failed completely")
+                        self.log(f"  Cannot proceed without glossary - aborting novel")
+                        return
+                    
                     self.gemini_translator.save_glossary(novel_id, self.file_manager)
             
             # Prepare list for bulk chapter upload
