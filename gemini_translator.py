@@ -182,28 +182,44 @@ English translation:"""
         self.logger(f"\n{'='*50}")
         self.logger("Generating Translation Glossary (MANDATORY)")
         self.logger(f"{'='*50}")
-        self.logger(f"Analyzing all {len(chapters_data)} chapters (complete raw content)...")
+        self.logger(f"Analyzing all {len(chapters_data)} chapters...")
         
-        # Combine ALL chapters with COMPLETE content (no truncation)
-        combined_text = "\n\n".join([
-            f"Chapter {i+1}:\n{ch['content']}"  # Use complete chapter content
-            for i, ch in enumerate(chapters_data)
-        ])
+        # Batch processing configuration
+        BATCH_SIZE = 30
+        self.glossary = {}
         
-        # Gemini has 1 million token input limit - no artificial limits needed
-        self.logger(f"  Using complete content ({len(combined_text)} chars, ~{len(combined_text)//4} tokens)")
+        # Split chapters into batches
+        batches = [chapters_data[i:i + BATCH_SIZE] for i in range(0, len(chapters_data), BATCH_SIZE)]
+        self.logger(f"  Split into {len(batches)} batches of {BATCH_SIZE} chapters each")
         
-        prompt = f"""You are a professional translator for Chinese web novels.
+        for batch_idx, batch in enumerate(batches):
+            self.logger(f"\n  Processing Batch {batch_idx + 1}/{len(batches)} ({len(batch)} chapters)...")
+            
+            # Combine chapters in this batch
+            combined_text = "\n\n".join([
+                f"Chapter {ch['idx']}:\n{ch['content']}"
+                for ch in batch
+            ])
+            
+            # Include existing glossary to maintain consistency
+            existing_glossary_context = ""
+            if self.glossary:
+                glossary_entries = "\n".join([f"- {cn} = {en}" for cn, en in list(self.glossary.items())[:100]])
+                existing_glossary_context = f"""
+Existing Glossary (MAINTAIN CONSISTENCY WITH THESE):
+{glossary_entries}
+"""
+            
+            prompt = f"""You are a professional translator for Chinese web novels.
 
-Task: Analyze the following Chinese novel chapters and create a consistent English glossary for character names, place names, special terms, and cultivation/skill terms.
+Task: Analyze the following Chinese novel chapters and create/update a consistent English glossary.
 
 Instructions:
-1. Extract ALL important names (characters, places, organizations) that appear in the text
+1. Extract ALL important names (characters, places, organizations)
 2. Extract ALL cultivation terms, skill names, and special terminology
-3. Provide consistent English translations that sound natural
-4. For names, use pinyin or appropriate English equivalents
-5. Be thorough - extract as many terms as possible for consistency
-6. Return ONLY a JSON object in this exact format:
+3. Provide consistent English translations
+4. IF a term is already in the "Existing Glossary", USE THE SAME TRANSLATION
+5. Return ONLY a JSON object in this exact format:
 
 {{
   "characters": {{"中文名": "English Name", ...}},
@@ -211,72 +227,61 @@ Instructions:
   "terms": {{"中文术语": "English Term", ...}}
 }}
 
-Chinese chapters:
+{existing_glossary_context}
+
+Chinese chapters to analyze:
 {combined_text}
 
 JSON glossary:"""
-        
-        # Retry with increasing wait times: 1min, 2min, 4min, 8min, 16min, 20min (max)
-        wait_times = [60, 120, 240, 480, 960, 1200]  # seconds
-        max_retries = len(wait_times)
-        
-        for attempt in range(max_retries):
-            try:
-                self.logger(f"  Glossary generation attempt {attempt + 1}/{max_retries}...")
-                
-                # Parse JSON response
-                response_text = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.2).strip()
-                
-                # Extract JSON from markdown code blocks if present
-                if '```json' in response_text:
-                    response_text = response_text.split('```json')[1].split('```')[0].strip()
-                elif '```' in response_text:
-                    response_text = response_text.split('```')[1].split('```')[0].strip()
-                
-                glossary_data = json.loads(response_text)
-                
-                # Flatten glossary for easy lookup
-                self.glossary = {}
-                for category in ['characters', 'places', 'terms']:
-                    if category in glossary_data:
-                        self.glossary.update(glossary_data[category])
-                
-                # Verify we got actual entries
-                if not self.glossary:
-                    raise Exception("Glossary is empty - no entries extracted")
-                
-                self.logger(f"✓ Glossary generated with {len(self.glossary)} entries")
-                self.logger(f"  - Characters: {len(glossary_data.get('characters', {}))}")
-                self.logger(f"  - Places: {len(glossary_data.get('places', {}))}")
-                self.logger(f"  - Terms: {len(glossary_data.get('terms', {}))}")
-                
-                # Log sample entries
-                if self.glossary:
-                    self.logger("\n  Sample glossary entries:")
-                    for i, (chinese, english) in enumerate(list(self.glossary.items())[:5]):
-                        self.logger(f"    {chinese} → {english}")
-                    if len(self.glossary) > 5:
-                        self.logger(f"    ... and {len(self.glossary) - 5} more")
-                
-                return self.glossary
-                
-            except json.JSONDecodeError as e:
-                self.logger(f"  ✗ Attempt {attempt + 1} failed - JSON parse error: {e}")
-                if attempt < max_retries - 1:
-                    self.logger(f"    Response preview: {response_text[:300]}...")
-            except Exception as e:
-                self.logger(f"  ✗ Attempt {attempt + 1} failed: {e}")
             
-            # If not the last attempt, wait and retry
-            if attempt < max_retries - 1:
-                wait_time = wait_times[attempt]
-                wait_minutes = wait_time // 60
-                self.logger(f"  ⏳ Waiting {wait_minutes} minute(s) before retry...")
-                time.sleep(wait_time)
-            else:
-                self.logger(f"\n✗ CRITICAL: Glossary generation failed after {max_retries} attempts")
-                self.logger(f"  Cannot proceed without glossary - aborting")
-                return None  # Signal failure to abort
+            # Retry logic for this batch
+            wait_times = [60, 120, 240, 480]
+            max_retries = len(wait_times)
+            batch_success = False
+            
+            for attempt in range(max_retries):
+                try:
+                    self.logger(f"    Batch {batch_idx + 1} attempt {attempt + 1}...")
+                    
+                    response_text = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.2).strip()
+                    
+                    if '```json' in response_text:
+                        response_text = response_text.split('```json')[1].split('```')[0].strip()
+                    elif '```' in response_text:
+                        response_text = response_text.split('```')[1].split('```')[0].strip()
+                    
+                    batch_glossary = json.loads(response_text)
+                    
+                    # Merge into main glossary
+                    new_entries = 0
+                    for category in ['characters', 'places', 'terms']:
+                        if category in batch_glossary:
+                            for cn, en in batch_glossary[category].items():
+                                if cn not in self.glossary:
+                                    self.glossary[cn] = en
+                                    new_entries += 1
+                                # If exists, keep existing translation for consistency
+                    
+                    self.logger(f"    ✓ Batch processed: Added {new_entries} new entries")
+                    batch_success = True
+                    break
+                    
+                except Exception as e:
+                    self.logger(f"    ✗ Batch attempt {attempt + 1} failed: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(wait_times[attempt])
+            
+            if not batch_success:
+                self.logger(f"  ✗ CRITICAL: Batch {batch_idx + 1} failed after retries")
+                self.logger(f"  Aborting glossary generation")
+                return None
+            
+            # Small delay between batches to be nice to API
+            if batch_idx < len(batches) - 1:
+                time.sleep(5)
+        
+        self.logger(f"\n✓ Final Glossary generated with {len(self.glossary)} entries")
+        return self.glossary
     
     def translate_chapter_content(self, content, chapter_number, glossary=None, google_translator=None):
         """
