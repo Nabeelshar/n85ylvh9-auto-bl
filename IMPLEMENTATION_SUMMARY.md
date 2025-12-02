@@ -220,7 +220,7 @@ novels/novel_XXXXX/
 - **Limits:** 15 requests/min, 1M tokens/min, 1,500 req/day
 - **Cost:** $0.00 per 1M tokens (FREE during experimental period)
 
-### Google Translate (via googletrans)
+### Google Translate (via deep-translator)
 - **Status:** Free forever
 - **Limits:** None (uses public API)
 - **Cost:** $0.00

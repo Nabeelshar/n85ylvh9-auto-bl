@@ -25,8 +25,11 @@ class WordPressAPI:
         except Exception as e:
             return False, str(e)
     
-    def create_story(self, story_data):
+    def create_story(self, story_data, check_only=False):
         """Create or get existing story in WordPress"""
+        if check_only:
+            story_data['check_only'] = True
+            
         response = requests.post(
             f"{self.wordpress_url}/wp-json/crawler/v1/story",
             headers={'X-API-Key': self.api_key},

@@ -1,4 +1,5 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-googletrans==4.0.0rc1
+deep-translator>=1.11.4
+google-genai>=0.3.0

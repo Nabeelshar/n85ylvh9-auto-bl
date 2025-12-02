@@ -1,19 +1,19 @@
 """
 Gemini API translator module with glossary support
-Uses REST API to avoid dependency conflicts
+Uses google-genai SDK
 Supports rotating API keys to handle rate limits
 """
 
 import json
 import time
-import requests
-
+from google import genai
+from google.genai import types
 
 class GeminiTranslator:
     def __init__(self, api_key, logger):
         self.logger = logger
         self.glossary = {}
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.client = None
         
         # Support multiple API keys (comma-separated or single)
         if api_key:
@@ -29,13 +29,14 @@ class GeminiTranslator:
             self.logger("WARNING: No Gemini API key provided")
             return
         
-        self.logger(f"✓ Gemini REST API client initialized with {len(self.api_keys)} API key(s)")
+        # Initialize client with first key
+        self._init_client()
+        self.logger(f"✓ Gemini SDK client initialized with {len(self.api_keys)} API key(s)")
     
-    def _get_current_key(self):
-        """Get the current API key"""
-        if not self.api_keys:
-            return None
-        return self.api_keys[self.current_key_index]
+    def _init_client(self):
+        """Initialize Gemini client with current key"""
+        if self.api_key:
+            self.client = genai.Client(api_key=self.api_key)
     
     def _rotate_key(self):
         """Rotate to the next API key"""
@@ -44,66 +45,58 @@ class GeminiTranslator:
         old_index = self.current_key_index
         self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
         self.api_key = self.api_keys[self.current_key_index]
+        self._init_client() # Re-init client with new key
         self.logger(f"  🔄 Rotated to API key {self.current_key_index + 1}/{len(self.api_keys)}")
         return self.current_key_index != old_index
     
     def _call_gemini_api(self, model, prompt, temperature=0.3):
-        """Call Gemini REST API with automatic key rotation on 429 errors"""
-        if not self.api_keys:
+        """Call Gemini API with automatic key rotation on 429 errors"""
+        if not self.client:
             raise Exception("No API keys available")
         
         # Try each key before giving up
         keys_tried = 0
         last_error = None
         
+        # Map model names if necessary
+        if model == 'gemini-flash-latest':
+            model = 'gemini-1.5-flash' # Safe default
+        
         while keys_tried < len(self.api_keys):
-            current_key = self._get_current_key()
-            url = f"{self.base_url}/{model}:generateContent?key={current_key}"
-            
-            payload = {
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": temperature
-                }
-            }
-            
             try:
-                response = requests.post(url, json=payload, timeout=120)
+                response = self.client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature
+                    )
+                )
                 
-                # Check for rate limit (429) - rotate key
-                if response.status_code == 429:
-                    self.logger(f"  ⚠ API key {self.current_key_index + 1} hit rate limit (429)")
-                    keys_tried += 1
-                    if self._rotate_key():
-                        continue  # Try next key
-                    else:
-                        # Only one key or all keys exhausted
-                        response.raise_for_status()
+                if response.text:
+                    return response.text
                 
-                response.raise_for_status()
+                raise Exception("No valid text in response")
                 
-                data = response.json()
-                if 'candidates' in data and len(data['candidates']) > 0:
-                    candidate = data['candidates'][0]
-                    if 'content' in candidate and 'parts' in candidate['content']:
-                        return candidate['content']['parts'][0]['text']
-                
-                raise Exception("No valid response from Gemini API")
-                
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:
-                    last_error = e
+            except Exception as e:
+                error_str = str(e)
+                # Check for rate limit (429) or quota exhausted
+                if "429" in error_str or "quota" in error_str.lower() or "resource_exhausted" in error_str.lower():
+                    self.logger(f"  ⚠ API key {self.current_key_index + 1} hit rate limit/quota")
                     keys_tried += 1
                     if self._rotate_key():
                         continue
-                raise
-            except Exception as e:
+                
+                last_error = e
+                # If it's not a rate limit, we might still want to rotate if it's a permission error, but usually we just raise.
+                # But for safety, let's only rotate on clear rate limits or if we haven't tried all keys.
+                # Actually, let's be aggressive with rotation on any error that looks like an API issue.
+                if keys_tried < len(self.api_keys) and ("429" in error_str or "500" in error_str or "503" in error_str):
+                     keys_tried += 1
+                     if self._rotate_key():
+                        continue
+                
                 raise
         
-        # All keys exhausted
         if last_error:
             raise last_error
         raise Exception("All API keys exhausted")
@@ -112,7 +105,7 @@ class GeminiTranslator:
         """
         Translate novel description with prompt to clean and extract only the description
         """
-        if not self.api_key:
+        if not self.client:
             self.logger("WARNING: Gemini API key not available for description translation")
             return description_html
         
@@ -138,7 +131,7 @@ English translation:"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.3).strip()
                 
                 # Verify translation actually happened (not just returned original)
                 if translated == description_html or len(translated) < 10:
@@ -152,30 +145,18 @@ English translation:"""
                 return translated
                 
             except Exception as e:
-                error_msg = str(e).lower()
                 if attempt < max_retries - 1:
                     self.logger(f"  ⚠ Gemini description attempt {attempt + 1} failed: {e}")
-                    import time
                     time.sleep(2 ** attempt)  # Exponential backoff
                 else:
                     self.logger(f"  ✗ Gemini description translation failed after {max_retries} attempts: {e}")
-                    # CRITICAL: Return None to signal translation failure
                     return None
     
     def generate_glossary(self, chapters_data, max_chapters=None):
         """
         Generate a glossary of names and terms from all chapters
-        MANDATORY - returns None on failure to abort the process
-        
-        Args:
-            chapters_data: List of dicts with 'title' and 'content' (Chinese)
-            max_chapters: Not used (kept for compatibility)
-        
-        Returns:
-            dict: Glossary mapping Chinese terms to English translations
-            None: If generation fails (signals abort)
         """
-        if not self.api_key:
+        if not self.client:
             self.logger("WARNING: Gemini API key not available for glossary generation")
             return None
         
@@ -243,7 +224,7 @@ JSON glossary:"""
                 try:
                     self.logger(f"    Batch {batch_idx + 1} attempt {attempt + 1}...")
                     
-                    response_text = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.2).strip()
+                    response_text = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.2).strip()
                     
                     if '```json' in response_text:
                         response_text = response_text.split('```json')[1].split('```')[0].strip()
@@ -260,7 +241,6 @@ JSON glossary:"""
                                 if cn not in self.glossary:
                                     self.glossary[cn] = en
                                     new_entries += 1
-                                # If exists, keep existing translation for consistency
                     
                     self.logger(f"    ✓ Batch processed: Added {new_entries} new entries")
                     batch_success = True
@@ -276,7 +256,6 @@ JSON glossary:"""
                 self.logger(f"  Aborting glossary generation")
                 return None
             
-            # Small delay between batches to be nice to API
             if batch_idx < len(batches) - 1:
                 time.sleep(5)
         
@@ -286,19 +265,8 @@ JSON glossary:"""
     def translate_chapter_content(self, content, chapter_number, glossary=None, google_translator=None):
         """
         Translate chapter content using Gemini with glossary consistency
-        Enhanced with multi-level fallback strategy
-        
-        Args:
-            content: Chinese chapter content
-            chapter_number: Chapter number for context
-            glossary: Optional glossary dict (uses self.glossary if not provided)
-            google_translator: Google Translate instance for fallback
-        
-        Returns:
-            tuple: (translated_content, translation_method)
-            translation_method: 'gemini', 'gemini_censored', or 'google'
         """
-        if not self.api_key:
+        if not self.client:
             self.logger("    WARNING: Gemini API key not available")
             return None, 'failed'
         
@@ -334,28 +302,26 @@ Chapter {chapter_number} content (Chinese):
 
 English translation:"""
         
-        # ATTEMPT 1: Try Gemini with original content (with retries for API errors)
+        # ATTEMPT 1: Try Gemini with original content
         max_retries = 3
         last_error = None
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('gemini-flash-latest', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.3).strip()
                 return translated, 'gemini'
                 
             except Exception as e:
                 last_error = e
                 error_msg = str(e)
                 
-                # Check for safety/content filtering errors - DON'T RETRY, go to fallback
+                # Check for safety/content filtering errors
                 if 'SAFETY' in error_msg.upper() or 'BLOCK' in error_msg.upper() or 'HARM' in error_msg.upper():
                     self.logger(f"    ⚠ Gemini safety filter triggered: {error_msg}")
-                    break  # Exit retry loop, go to fallback strategy
+                    break
                 
-                # For other errors (API, rate limit, etc.), retry
                 if attempt < max_retries - 1:
                     self.logger(f"    ⚠ Gemini attempt {attempt + 1} failed: {error_msg}")
-                    import time
-                    time.sleep(2 ** attempt)  # Exponential backoff
+                    time.sleep(2 ** attempt)
                     continue
                 else:
                     self.logger(f"    ✗ Gemini translation failed after {max_retries} attempts: {error_msg}")
@@ -367,7 +333,7 @@ English translation:"""
             if 'SAFETY' in error_msg.upper() or 'BLOCK' in error_msg.upper() or 'HARM' in error_msg.upper():
                 self.logger(f"    ⚠ Gemini safety filter triggered")
                 
-                # ATTEMPT 2: Translate with Google Translate, then censor and retry Gemini
+                # ATTEMPT 2: Translate with Google Translate (deep-translator), then censor and retry Gemini
                 if google_translator:
                     self.logger(f"    → Attempting Google Translate + censoring + Gemini retry...")
                     
@@ -397,7 +363,7 @@ Text to polish:
 
 Polished version:"""
                         
-                        polished = self._call_gemini_api('gemini-flash-latest', retry_prompt, temperature=0.3).strip()
+                        polished = self._call_gemini_api('gemini-1.5-flash', retry_prompt, temperature=0.3).strip()
                         self.logger(f"    ✓ Gemini succeeded with censored content")
                         return polished, 'gemini_censored'
                         
@@ -409,111 +375,58 @@ Polished version:"""
                 else:
                     return None, 'failed'
         else:
-            # No error or non-safety error after retries
             return None, 'failed'
     
     def _censor_content(self, text):
-        """
-        Censor potentially problematic words for content filtering
-        
-        Args:
-            text: Text to censor
-            
-        Returns:
-            Censored text
-        """
-        # Common words that might trigger filters (especially for BL/gay novels)
+        """Censor potentially problematic words for content filtering"""
         censor_map = {
-            # Explicit content
-            'dick': 'member',
-            'cock': 'member',
-            'penis': 'member',
-            'pussy': 'flower',
-            'vagina': 'flower',
-            'ass': 'behind',
-            'asshole': 'behind',
-            'anal': 'intimate',
-            'sex': 'intimacy',
-            'sexy': 'attractive',
-            'sexual': 'intimate',
-            'fuck': 'embrace',
-            'fucking': 'embracing',
-            'fucked': 'embraced',
-            'cum': 'finish',
-            'cumming': 'finishing',
-            'orgasm': 'peak',
-            'aroused': 'excited',
-            'erection': 'reaction',
-            'hard-on': 'reaction',
-            'masturbate': 'touch',
-            'penetrate': 'enter',
-            'penetration': 'entry',
-            'thrust': 'move',
-            'thrusting': 'moving',
-            'moan': 'sound',
-            'moaning': 'sounding',
-            'groan': 'sound',
-            'groaning': 'sounding',
-            'lust': 'desire',
-            'lustful': 'desirous',
-            'seduce': 'attract',
-            'seduction': 'attraction',
-            'naked': 'unclothed',
-            'nude': 'bare',
-            'breast': 'chest',
-            'nipple': 'tip',
-            'kiss': 'touch',
-            'kissing': 'touching',
-            'lick': 'taste',
-            'licking': 'tasting',
-            'suck': 'draw',
-            'sucking': 'drawing',
-            # Violence (keep minimal since you said it's not about violence)
-            'blood': 'energy',
-            'bloody': 'intense',
-            'corpse': 'body',
-            'tortured': 'pressured',
-            'pain': 'discomfort',
-            'painful': 'difficult',
-            'weapon': 'tool',
-            'sword': 'blade',
-            'knife': 'blade',
-            'attack': 'strike',
-            'attacked': 'struck',
-            'violent': 'intense',
-            'violence': 'intensity',
+            'dick': 'member', 'cock': 'member', 'penis': 'member',
+            'pussy': 'flower', 'vagina': 'flower',
+            'ass': 'behind', 'asshole': 'behind', 'anal': 'intimate',
+            'sex': 'intimacy', 'sexy': 'attractive', 'sexual': 'intimate',
+            'fuck': 'embrace', 'fucking': 'embracing', 'fucked': 'embraced',
+            'cum': 'finish', 'cumming': 'finishing', 'orgasm': 'peak',
+            'aroused': 'excited', 'erection': 'reaction', 'hard-on': 'reaction',
+            'masturbate': 'touch', 'penetrate': 'enter', 'penetration': 'entry',
+            'thrust': 'move', 'thrusting': 'moving',
+            'moan': 'sound', 'moaning': 'sounding', 'groan': 'sound', 'groaning': 'sounding',
+            'lust': 'desire', 'lustful': 'desirous',
+            'seduce': 'attract', 'seduction': 'attraction',
+            'naked': 'unclothed', 'nude': 'bare',
+            'breast': 'chest', 'nipple': 'tip',
+            'kiss': 'touch', 'kissing': 'touching',
+            'lick': 'taste', 'licking': 'tasting',
+            'suck': 'draw', 'sucking': 'drawing',
+            'blood': 'energy', 'bloody': 'intense', 'corpse': 'body',
+            'tortured': 'pressured', 'pain': 'discomfort', 'painful': 'difficult',
+            'weapon': 'tool', 'sword': 'blade', 'knife': 'blade',
+            'attack': 'strike', 'attacked': 'struck', 'violent': 'intense', 'violence': 'intensity',
         }
         
         censored = text
+        import re
         for original, replacement in censor_map.items():
-            # Case-insensitive replacement, preserve capitalization
-            import re
             pattern = re.compile(re.escape(original), re.IGNORECASE)
-            
             def replace_func(match):
                 orig = match.group(0)
                 if orig[0].isupper():
                     return replacement.capitalize()
                 return replacement
-            
             censored = pattern.sub(replace_func, censored)
         
         return censored
     
     def save_glossary(self, novel_id, file_manager):
-        """Save glossary to file for future reference"""
+        """Save glossary to file"""
         if not self.glossary:
             return
-        
         try:
             import os
             novel_dir = os.path.join('novels', f'novel_{novel_id}')
             os.makedirs(novel_dir, exist_ok=True)
-            
             filepath = os.path.join(novel_dir, 'glossary.json')
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(self.glossary, f, ensure_ascii=False, indent=2)
-            
             self.logger(f"✓ Glossary saved to {filepath}")
         except Exception as e:
             self.logger(f"✗ Failed to save glossary: {e}")
@@ -523,7 +436,6 @@ Polished version:"""
         try:
             import os
             filepath = os.path.join('novels', f'novel_{novel_id}', 'glossary.json')
-            
             if os.path.exists(filepath):
                 with open(filepath, 'r', encoding='utf-8') as f:
                     self.glossary = json.load(f)

@@ -63,7 +63,7 @@ pip install -r requirements.txt
 
 This installs:
 - `google-genai` - Gemini API client
-- `googletrans==4.0.0rc1` - Free Google Translate (for titles and fallback)
+- `deep-translator` - Free Google Translate (for titles and fallback)
 - `requests`, `beautifulsoup4`, `lxml` - Web scraping
 
 ---
@@ -267,7 +267,7 @@ Add delays or use paid tier for heavy usage.
 
 Current model is **FREE** during experimental period!
 
-### Google Translate (via googletrans):
+### Google Translate (via deep-translator):
 - **100% Free** - Uses public API
 
 ---

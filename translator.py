@@ -1,13 +1,13 @@
 """
-Translation module using googletrans-py (free Google Translate API)
+Translation module using deep-translator (free Google Translate API)
 This is used for titles and as fallback for content translation
 """
 
 try:
-    from googletrans import Translator as GoogletransTranslator
-    GOOGLETRANS_AVAILABLE = True
+    from deep_translator import GoogleTranslator
+    DEEP_TRANSLATOR_AVAILABLE = True
 except ImportError:
-    GOOGLETRANS_AVAILABLE = False
+    DEEP_TRANSLATOR_AVAILABLE = False
 
 
 class Translator:
@@ -16,14 +16,15 @@ class Translator:
         self.client = None
         self.service = None
         
-        if GOOGLETRANS_AVAILABLE:
+        if DEEP_TRANSLATOR_AVAILABLE:
             try:
-                self.client = GoogletransTranslator()
-                self.service = 'googletrans'
-                self.logger("Using googletrans-py (free Google Translate API) for titles")
+                # Initialize with default source/target, can be overridden in translate()
+                self.client = GoogleTranslator(source='auto', target='en')
+                self.service = 'deep-translator'
+                self.logger("Using deep-translator (free Google Translate API) for titles")
                 return
             except Exception as e:
-                self.logger(f"ERROR: Could not initialize googletrans: {type(e).__name__}: {e}")
+                self.logger(f"ERROR: Could not initialize deep-translator: {type(e).__name__}: {e}")
                 import traceback
                 self.logger(f"Traceback: {traceback.format_exc()}")
         
@@ -31,27 +32,31 @@ class Translator:
         self.client = None
     
     def translate(self, text, source_lang='zh-CN', target_lang='en'):
-        """Translate text using googletrans (for titles and fallback)"""
+        """Translate text using deep-translator (for titles and fallback)"""
         if not self.client:
             self.logger("Warning: No translator available")
             return text
         
         try:
-            return self._translate_googletrans(text, source_lang, target_lang)
+            return self._translate_deep(text, source_lang, target_lang)
         except Exception as e:
             self.logger(f"Translation error: {e}")
             return text
     
-    def _translate_googletrans(self, text, source, target):
-        """Translate using googletrans with chunking for long texts"""
+    def _translate_deep(self, text, source, target):
+        """Translate using deep-translator with chunking for long texts"""
         max_length = 4500  # Under 5000 limit
         
-        # Map language codes
-        source = source.replace('zh-CN', 'zh-cn')
+        # Map language codes if necessary (deep-translator handles standard codes well)
+        # zh-CN is standard, deep-translator uses 'zh-CN' or 'zh-TW' usually.
+        # Let's ensure source is correct. deep-translator supports 'zh-CN'.
+        
+        # Update client source/target for this request
+        self.client.source = source
+        self.client.target = target
         
         if len(text) <= max_length:
-            result = self.client.translate(text, src=source, dest=target)
-            return result.text
+            return self.client.translate(text)
         else:
             # Split by paragraphs and group into chunks
             paragraphs = text.split('\n\n')
@@ -63,8 +68,8 @@ class Translator:
                 if current_length + len(para) > max_length and current_chunk:
                     # Translate current chunk
                     chunk_text = '\n\n'.join(current_chunk)
-                    result = self.client.translate(chunk_text, src=source, dest=target)
-                    translated_paragraphs.append(result.text)
+                    result = self.client.translate(chunk_text)
+                    translated_paragraphs.append(result)
                     
                     # Start new chunk
                     current_chunk = [para]
@@ -76,7 +81,7 @@ class Translator:
             # Translate remaining chunk
             if current_chunk:
                 chunk_text = '\n\n'.join(current_chunk)
-                result = self.client.translate(chunk_text, src=source, dest=target)
-                translated_paragraphs.append(result.text)
+                result = self.client.translate(chunk_text)
+                translated_paragraphs.append(result)
             
             return '\n\n'.join(translated_paragraphs)
