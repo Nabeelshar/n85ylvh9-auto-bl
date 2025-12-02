@@ -59,8 +59,8 @@ class GeminiTranslator:
         last_error = None
         
         # Map model names if necessary
-        if model == 'gemini-flash-latest':
-            model = 'gemini-1.5-flash' # Safe default
+        # if model == 'gemini-flash-latest':
+        #     model = 'gemini-1.5-flash' # Safe default
         
         while keys_tried < len(self.api_keys):
             try:
@@ -131,7 +131,7 @@ English translation:"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.3).strip()
                 
                 # Verify translation actually happened (not just returned original)
                 if translated == description_html or len(translated) < 10:
@@ -224,7 +224,7 @@ JSON glossary:"""
                 try:
                     self.logger(f"    Batch {batch_idx + 1} attempt {attempt + 1}...")
                     
-                    response_text = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.2).strip()
+                    response_text = self._call_gemini_api('models/gemini-2.5-pro', prompt, temperature=0.2).strip()
                     
                     if '```json' in response_text:
                         response_text = response_text.split('```json')[1].split('```')[0].strip()
@@ -307,7 +307,7 @@ English translation:"""
         last_error = None
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('gemini-1.5-flash', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.3).strip()
                 return translated, 'gemini'
                 
             except Exception as e:
@@ -363,7 +363,7 @@ Text to polish:
 
 Polished version:"""
                         
-                        polished = self._call_gemini_api('gemini-1.5-flash', retry_prompt, temperature=0.3).strip()
+                        polished = self._call_gemini_api('models/gemini-flash-lite-latest', retry_prompt, temperature=0.3).strip()
                         self.logger(f"    ✓ Gemini succeeded with censored content")
                         return polished, 'gemini_censored'
                         
