@@ -54,6 +54,10 @@ class GeminiTranslator:
         if not self.client:
             raise Exception("No API keys available")
         
+        # Enforce rate limiting (15 RPM = 1 request every 4 seconds)
+        # Adding a small buffer (4.5s) to be safe
+        time.sleep(4.5)
+        
         # Try each key before giving up
         keys_tried = 0
         last_error = None
@@ -224,7 +228,8 @@ JSON glossary:"""
                 try:
                     self.logger(f"    Batch {batch_idx + 1} attempt {attempt + 1}...")
                     
-                    response_text = self._call_gemini_api('models/gemini-2.5-pro', prompt, temperature=0.2).strip()
+                    # Use Flash-Lite for glossary too (1,000 RPD vs 50 RPD for Pro)
+                    response_text = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.2).strip()
                     
                     if '```json' in response_text:
                         response_text = response_text.split('```json')[1].split('```')[0].strip()
