@@ -102,7 +102,7 @@ python crawler.py https://www.xbanxia.cc/list/1_1.html
    - Analyzes first 10 chapters
    - Extracts character names, places, and terms
    - Creates consistent English translations
-   - Saves to `glossary.json`
+   - Saves to `glossary.txt`
    
    **PASS 3: Translate with Glossary**
    - **Chapter Title** → Google Translate
@@ -137,7 +137,7 @@ After crawling, you'll have:
 novels/
 └── novel_396941/
     ├── metadata.json              # Novel info with translations
-    ├── glossary.json               # Character names & terms (NEW!)
+    ├── glossary.txt                # Character names & terms (NEW!)
     ├── cover.jpg                   # Downloaded cover
     ├── chapters_raw/               # Original Chinese
     │   ├── 小说名_Chapter_001.html
@@ -288,7 +288,7 @@ Current model is **FREE** during experimental period!
 
 1. **Start Small** - Test with 1 novel first
 2. **Monitor Output** - Check translated quality on WordPress
-3. **Adjust Glossary** - Edit `glossary.json` manually if needed
+3. **Adjust Glossary** - Edit `glossary.txt` manually if needed
 4. **Use Resume** - Crawler automatically resumes interrupted novels
 5. **Batch Processing** - Set `max_chapters_per_run` for incremental crawling
 

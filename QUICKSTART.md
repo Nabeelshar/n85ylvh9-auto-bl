@@ -213,7 +213,7 @@ After crawling, check these locations:
 ```
 crawler/crawler/novels/novel_396508/
 ├── metadata.json              # Novel info + translations
-├── glossary.json              # NEW: Character/term glossary
+├── glossary.txt               # NEW: Character/term glossary
 ├── cover.jpg                  # Cover image
 ├── chapters_raw/              # Original Chinese
 │   └── 韶華三思_Chapter_001.html
@@ -232,7 +232,7 @@ crawler/crawler/novels/novel_396508/
 
 1. **Start Small** - Test with 1 novel (6 chapters) first
 2. **Check Quality** - Read a few translated chapters on WordPress
-3. **Edit Glossary** - Manually edit `glossary.json` if you want different translations
+3. **Edit Glossary** - Manually edit `glossary.txt` if you want different translations
 4. **Monitor API Usage** - Gemini free tier has limits (15 req/min)
 5. **Use Resume** - If interrupted, just run the same command again
 

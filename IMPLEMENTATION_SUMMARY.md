@@ -11,7 +11,7 @@
    - ✅ Analyzes first 10 chapters to extract names and terms
    - ✅ Generates consistent English translations
    - ✅ Uses glossary for all chapter translations
-   - ✅ Saved to `glossary.json` for reuse
+   - ✅ Saved to `glossary.txt` for reuse
 
 ### 3. **Two-Pass Processing**
    - **Pass 1:** Download all raw chapters
@@ -93,7 +93,7 @@ Chapter Processing:
 ├─ PASS 2: Generate Glossary
 │   ├─ Analyze first 10 chapters
 │   ├─ Extract names & terms
-│   └─ Save to glossary.json
+│   └─ Save to glossary.txt
 │
 ├─ PASS 3: Translate
 │   ├─ Title ──────→ Google Translate
@@ -203,7 +203,7 @@ crawler/crawler/
 Output:
 novels/novel_XXXXX/
 ├── metadata.json              # Novel metadata + translations
-├── glossary.json              # NEW: Character/term glossary
+├── glossary.txt               # NEW: Character/term glossary
 ├── cover.jpg                  # Cover image
 ├── chapters_raw/              # Original Chinese
 │   └── 小说名_Chapter_001.html
@@ -311,7 +311,7 @@ After running the crawler, verify:
 
 ### Local Files
 - [ ] `novels/novel_XXXXX/metadata.json` exists
-- [ ] `novels/novel_XXXXX/glossary.json` exists (NEW!)
+- [ ] `novels/novel_XXXXX/glossary.txt` exists (NEW!)
 - [ ] `novels/novel_XXXXX/cover.jpg` exists
 - [ ] `chapters_raw/` has Chinese chapters
 - [ ] `chapters_translated/` has English chapters
