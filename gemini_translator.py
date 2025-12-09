@@ -72,7 +72,8 @@ class GeminiTranslator:
                     model=model,
                     contents=prompt,
                     config=types.GenerateContentConfig(
-                        temperature=temperature
+                        temperature=temperature,
+                        thinking_config={'thinking_budget': 0}
                     )
                 )
                 
@@ -204,20 +205,17 @@ Instructions:
 2. Extract ALL cultivation terms, skill names, and special terminology
 3. Provide consistent English translations
 4. IF a term is already in the "Existing Glossary", USE THE SAME TRANSLATION
-5. Return ONLY a JSON object in this exact format:
+5. Return the glossary in plain text format, one entry per line:
+Chinese Term = English Translation
 
-{{
-  "characters": {{"中文名": "English Name", ...}},
-  "places": {{"中文地名": "English Place", ...}},
-  "terms": {{"中文术语": "English Term", ...}}
-}}
+DO NOT use JSON. DO NOT use markdown code blocks.
 
 {existing_glossary_context}
 
 Chinese chapters to analyze:
 {combined_text}
 
-JSON glossary:"""
+Glossary:"""
             
             # Retry logic for this batch
             wait_times = [60, 120, 240, 480]
@@ -229,21 +227,23 @@ JSON glossary:"""
                     self.logger(f"    Batch {batch_idx + 1} attempt {attempt + 1}...")
                     
                     # Use Flash-Lite for glossary too (1,000 RPD vs 50 RPD for Pro)
+                    # Config check: thinking is off (default), max_output_tokens is unset (default infinite)
                     response_text = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.2).strip()
                     
-                    if '```json' in response_text:
-                        response_text = response_text.split('```json')[1].split('```')[0].strip()
-                    elif '```' in response_text:
-                        response_text = response_text.split('```')[1].split('```')[0].strip()
+                    # Remove markdown code blocks if present
+                    if '```' in response_text:
+                        response_text = response_text.replace('```', '').strip()
                     
-                    batch_glossary = json.loads(response_text)
-                    
-                    # Merge into main glossary
+                    # Parse plain text glossary
                     new_entries = 0
-                    for category in ['characters', 'places', 'terms']:
-                        if category in batch_glossary:
-                            for cn, en in batch_glossary[category].items():
-                                if cn not in self.glossary:
+                    for line in response_text.split('\\n'):
+                        line = line.strip()
+                        if line and '=' in line:
+                            parts = line.split('=', 1)
+                            if len(parts) == 2:
+                                cn = parts[0].strip()
+                                en = parts[1].strip()
+                                if cn and en and cn not in self.glossary:
                                     self.glossary[cn] = en
                                     new_entries += 1
                     
