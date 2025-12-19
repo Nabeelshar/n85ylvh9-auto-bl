@@ -9,6 +9,9 @@ import time
 from google import genai
 from google.genai import types
 
+
+DEFAULT_GEMINI_MODEL = 'models/gemini-3-flash-preview'
+
 class GeminiTranslator:
     def __init__(self, api_key, logger):
         self.logger = logger
@@ -136,7 +139,7 @@ English translation:"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api(DEFAULT_GEMINI_MODEL, prompt, temperature=0.3).strip()
                 
                 # Verify translation actually happened (not just returned original)
                 if translated == description_html or len(translated) < 10:
@@ -228,7 +231,7 @@ Glossary:"""
                     
                     # Use Flash-Lite for glossary too (1,000 RPD vs 50 RPD for Pro)
                     # Config check: thinking is off (default), max_output_tokens is unset (default infinite)
-                    response_text = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.2).strip()
+                    response_text = self._call_gemini_api(DEFAULT_GEMINI_MODEL, prompt, temperature=0.2).strip()
                     
                     # Remove markdown code blocks if present
                     if '```' in response_text:
@@ -312,7 +315,7 @@ English translation:"""
         last_error = None
         for attempt in range(max_retries):
             try:
-                translated = self._call_gemini_api('models/gemini-flash-lite-latest', prompt, temperature=0.3).strip()
+                translated = self._call_gemini_api(DEFAULT_GEMINI_MODEL, prompt, temperature=0.3).strip()
                 return translated, 'gemini'
                 
             except Exception as e:
@@ -368,7 +371,7 @@ Text to polish:
 
 Polished version:"""
                         
-                        polished = self._call_gemini_api('models/gemini-flash-lite-latest', retry_prompt, temperature=0.3).strip()
+                        polished = self._call_gemini_api(DEFAULT_GEMINI_MODEL, retry_prompt, temperature=0.3).strip()
                         self.logger(f"    ✓ Gemini succeeded with censored content")
                         return polished, 'gemini_censored'
                         

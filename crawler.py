@@ -210,7 +210,21 @@ class NovelCrawler:
         self.log("\n[3/6] Parsing novel data...")
         self.log(f"  Title: {novel_data['title']}")
         self.log(f"  Author: {novel_data['author']}")
-        self.log(f"  Chapters found: {len(novel_data['chapters'])}")
+        chapters_total = len(novel_data['chapters'])
+        self.log(f"  Chapters found: {chapters_total}")
+
+        # Hard limiter: abort very large novels
+        MAX_CHAPTERS_ABORT = 350
+        if chapters_total > MAX_CHAPTERS_ABORT:
+            self.log(f"  ✗ Aborting: novel has {chapters_total} chapters (> {MAX_CHAPTERS_ABORT})")
+            self.file_manager.update_novel_progress(
+                novel_url,
+                status='failed',
+                chapters_crawled=0,
+                chapters_total=chapters_total,
+                story_id=novel_progress.get('story_id'),
+            )
+            return
         
         # Step 4: Translate title and description
         self.log("\n[4/6] Translating metadata...")
